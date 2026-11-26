@@ -110,7 +110,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: telemetry-shard-${{ matrix.shard }}
-          path: validator_data.json
+          path: |
+            validator_data.json
+            validator_data_v3.json
           retention-days: 1
 
   merge-and-publish:
@@ -135,6 +137,16 @@ jobs:
             const fs = require("fs");
             const path = require("path");
             let mergedFeed = {};
+            let mergedV3 = {
+              schema_version: 3,
+              shard_id: "merged",
+              workflow: "mesh-audit.yml",
+              region_code: "US",
+              captured_at: new Date().toISOString(),
+              channels: [],
+              videos: []
+            };
+            const seenChannels = new Map();
             const shardsDir = path.join(process.cwd(), "shards");
             if (fs.existsSync(shardsDir)) {
               const entries = fs.readdirSync(shardsDir);
@@ -144,18 +156,28 @@ jobs:
                   try {
                     const data = JSON.parse(fs.readFileSync(targetFile, "utf8"));
                     Object.assign(mergedFeed, data);
-                    console.log(`Merged [${entry}]: ${Object.keys(data).length} categories.`);
                   } catch(e) {
                     console.error("Error reading " + targetFile, e);
                   }
                 }
+                const targetV3 = path.join(shardsDir, entry, "validator_data_v3.json");
+                if (fs.existsSync(targetV3)) {
+                  try {
+                    const v3 = JSON.parse(fs.readFileSync(targetV3, "utf8"));
+                    for (const ch of (v3.channels || [])) {
+                      if (ch.channel_id && !seenChannels.has(ch.channel_id)) seenChannels.set(ch.channel_id, ch);
+                    }
+                    if (Array.isArray(v3.videos)) mergedV3.videos.push(...v3.videos);
+                  } catch(e) {
+                    console.error("Error reading " + targetV3, e);
+                  }
+                }
               }
             }
-            // Write stealth payload
-            fs.writeFileSync("mesh_topology.json", JSON.stringify(mergedFeed));
-            // Also write legacy filename for seamless backwards compatibility
+            mergedV3.channels = Array.from(seenChannels.values());
+            fs.writeFileSync("mesh_topology.json", mergedV3.videos.length > 0 ? JSON.stringify(mergedV3) : JSON.stringify(mergedFeed));
             fs.writeFileSync("tv_feed_latest.json", JSON.stringify(mergedFeed));
-            console.log(`Successfully merged ${Object.keys(mergedFeed).length} total categories into mesh_topology.json!`);
+            console.log(`Merged v3 videos=${mergedV3.videos.length}, channels=${mergedV3.channels.length}, v2 cats=${Object.keys(mergedFeed).length}`);
           '
 
       - name: Publish to Stealth prod Branch
